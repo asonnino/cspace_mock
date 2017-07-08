@@ -1,9 +1,9 @@
-##################################################################################
+###################################################
 # Chainspace Mock
 # cspace_service.py
 #
 # version: 0.0.1
-##################################################################################
+###################################################
 from json        import loads, dumps
 from hashlib     import sha256
 from binascii    import hexlify
@@ -11,23 +11,22 @@ from tinydb      import TinyDB, Query
 import requests
 
 
-##################################################################################
+###################################################
 # wrap
 # compute the hash of x
-##################################################################################
+###################################################
 def H(x):
     return hexlify(sha256(x).digest())
 
 
-##################################################################################
+###################################################
 # Chainspace's class
-##################################################################################
+###################################################
 class ChainSpace:
-    # ----------------------------------------------------------------------------
+    # ---------------------------------------------
     # init
-    # At th moment, this function initialises all objects that will have be stored
-    # in a database.
-    # ----------------------------------------------------------------------------
+    # At th moment, this function initialises all objects that will have be stored in a database.
+    # ---------------------------------------------
     def __init__(self, dbName='db.json'):
         # init db
         db          = TinyDB(dbName)
@@ -53,10 +52,10 @@ class ChainSpace:
         self.head.insert({"head": "Ohm"})
 
 
-    # ----------------------------------------------------------------------------
+    # ---------------------------------------------
     # update_log
     # update the log with the input data.
-    # ----------------------------------------------------------------------------
+    # ---------------------------------------------
     def update_log(self, data):
         # append data to the log
         self.log.insert(data)
@@ -69,107 +68,161 @@ class ChainSpace:
         self.head.insert({"head": newHead})
 
 
-    # ----------------------------------------------------------------------------
+    # ---------------------------------------------
     # call checker
     # call the transaction's checker
-    # ----------------------------------------------------------------------------
+    # ---------------------------------------------
     def call_checker(self, packet):
         # call the checker
-        r = requests.post(packet["contractMethod"], data = dumps(packet))
+        #checkerURL = r"http://127.0.0.1:5001/bank/transfer"
+        checkerURL = r"http://127.0.0.1:5001/value/add"
+        r = requests.post(checkerURL, data = dumps(packet))
         # return result
         return loads(r.text)["status"] == "OK"
 
 
-    # ----------------------------------------------------------------------------
+    # ---------------------------------------------
     # apply_transaction
     # execute a transaction
-    # ----------------------------------------------------------------------------
-    def apply_transaction(self, T):
-        # assert that the transaction is well-formed
-        assert "contractMethod"  in T
-        assert "inputs"          in T
-        assert "referenceInputs" in T
-        assert "parameters"      in T 
-        assert "outputs"         in T
+    # ---------------------------------------------
+    def apply_transaction(self, requestData):
 
-        # get inputs from the dabatase
-        inputs_objs = []
-        ref_inputs_objs = []
-        try:
-            for item in T["inputs"]:
-                inputs_objs.append(loads(self.data.get(self.query.id == item)["object"]))
-            for item in T["referenceInputs"]:
-                ref_inputs_objs.append(loads(self.data.get(self.query.id == item)["object"]))
-        except KeyError as e:
-            raise Exception("Object not in the Database: %s" % e.args[0])
+        # get transaction and store
+        packet = loads(requestData)
+        transaction, store = packet["transaction"], packet["store"]
 
-        # create a 'checked' transaction, with the inputs
-        Check_T = {
-            "contractMethod"  : T["contractMethod"],
-            "inputs"          : inputs_objs,
-            "referenceInputs" : ref_inputs_objs,
-            "parameters"      : T["parameters"],  
-            "outputs"         : T["outputs"]
-        }
+        # loop over dependencies
+        returns = []
+        for dependency in transaction["dependencies"]: 
+            returns += self.apply_transaction(dependency)
 
+    	# assert that the transaction is well-formed
+        self.check_format(transaction, store)
+
+        # make transaction for checker
+        packetForChecker = self.make_packet_for_checker(transaction, store)
+        packetForChecker["parameters"] += returns
+
+        # process top-level transaction
+        return self.apply_transaction_helper(transaction, packetForChecker)
+
+
+
+	# ---------------------------------------------
+    # apply_transactio_helper
+    # execute a transaction
+    # ---------------------------------------------    	
+    def apply_transaction_helper(self, transaction, packetForChecker):
+        
         # call the checker to verify integrity of the computation
-        assert self.call_checker(Check_T)       
+        if not self.call_checker(packetForChecker):
+        	raise Exception("The checker declined the transaction.") 
 
         # create fresh transaction IDs
-        Tx_ID       = H(dumps(T))
-        Output_IDs  = [H(Tx_ID+"|%s" % i) for i, _ in enumerate(T["outputs"])]
+        Tx_ID       = H(dumps(transaction))
+        #Output_IDs  = [H(Tx_ID+"|%s" % i) for i, _ in enumerate(transaction["outputs"])]
+        Output_IDs = []
+        for o in transaction["outputs"]:
+            Output_IDs.append(H(Tx_ID +"|"+ o))
 
         # verify that the input objects are active
-        for ID in T["inputs"]:
+        for ID in transaction["inputIDs"]:
             o = self.active.get(self.query.id == ID)
-            if o["status"] != None:
-                raise Exception("Object not Active: %s" % ID)
+            if o == None:
+                raise Exception("Object: %s does not exist" % ID)
+            elif o["status"] != None:
+                raise Exception("Object: %s not active" % ID)
 
         # verify that the reference input objects are active
-        for ID in T["referenceInputs"]:
+        for ID in transaction["referenceInputIDs"]:
             o = self.active.get(self.query.id == ID)
-            if o["status"] != None:
-                raise Exception("Object not Active: %s" % ID)
+            if o == None: 
+                raise Exception("Object: %s does not exist" % ID)
+            elif o["status"] != None:
+                raise Exception("Object: %s not active" % ID)
 
         # now make all objects inactif    
-        for ID in T["inputs"]:
+        for ID in transaction["inputIDs"]:
             self.active.update({"status": Tx_ID}, self.query.id == ID)
             
         # register new objects
-        for ID, obj in zip(Output_IDs, T["outputs"]):
+        for ID, obj in zip(Output_IDs, transaction["outputs"]):
             self.data.insert({"id" : ID, "object" : obj})
             self.active.insert({"id" : ID, "status" : None})
 
         # setup as hashchain: update the log
-        self.update_log({"id" : Tx_ID, "transaction" : T})
+        self.update_log({"id" : Tx_ID, "transaction" : transaction})
 
         # return the transaction and object's output ID
-        return Tx_ID, Output_IDs
+        return transaction["returns"]
+
         
         
-    # ----------------------------------------------------------------------------
-    # debug_register_object
-    # debug method: create an object (add to DB) and returns its ID
-    # ----------------------------------------------------------------------------
-    def debug_register_object(self, O, ID=None):
-        # check the format
-        if ID is None:
-            ID = H(dumps(O))
-        assert self.data.search(self.query.id == ID) == []
-        assert self.log.search(self.query.id == ID)  == []
+    # ---------------------------------------------
+    # check_format
+    # check the transaction's format
+    # ---------------------------------------------
+    def check_format(self, transaction, store):
+        try:
+            # loop over all inputs' and reference inputs' ID
+            for ID in transaction["inputIDs"] + transaction["referenceInputIDs"]:
+                # get object from db
+                objectDB = self.data.get(self.query.id == ID)
+                if objectDB == None:
+                    raise Exception("Malformed key-value store")
 
-        # create, save and set active the object
-        self.data.insert({"id" : ID, "object" : O})
-        self.active.insert({"id" : ID, "status" : None})
+                # look for object in store
+                objectStore = None
+                for item in store:
+                    if item["key"] == ID:
+                        objectStore = item["value"]
+                        if H(objectDB["object"]) != H(objectStore):
+                            raise Exception("Object: %s in the store does not match the database" % ID)
 
-        # return the ID
-        return ID
+                # if the object is not in the store
+                if objectStore == None:
+                    raise Exception("Object: %s is not in the store" % ID)
+        except KeyError as e:
+            raise Exception("Malformed key-value store")
+
+
+    # ---------------------------------------------
+    # make_packet_for_checker
+    # format a packet to be sent to the checker
+    # ---------------------------------------------
+    def make_packet_for_checker(self, transaction, store):
+    	# get inputs from the dabatase
+        inputs = []
+        referenceInputs = []
+        try:
+            for ID in transaction["inputIDs"]:
+                for item in store:
+                    if item["key"] == ID:
+                        inputs.append(item["value"])
+            for ID in transaction["referenceInputIDs"]:
+                for item in store:
+                	if item["key"] == ID:
+                		inputs.append(item["value"])
+        except KeyError as e:
+            raise Exception("Malformed key-value store")
+        
+        # create packet for checker
+        return {
+            "contractID"        : transaction["contractID"],
+            "inputs"       	    : inputs,
+            "referenceInputs"   : referenceInputs,
+            "parameters"        : transaction["parameters"],
+            "returns"           : transaction["returns"],
+            "outputs"           : transaction["outputs"],
+            "dependencies"      : transaction["dependencies"]
+        }
 
 
 
-##################################################################################
+
+###################################################
 # webapp
-##################################################################################
+###################################################
 from flask import Flask, request
 
 # the state of the infrastructure
@@ -177,18 +230,18 @@ app     = Flask(__name__)
 app.cs  = ChainSpace()
 
 
-# -------------------------------------------------------------------------------
+# -------------------------------------------------
 # /
 # test the server's connection
-# -------------------------------------------------------------------------------
+# -------------------------------------------------
 @app.route("/", methods=['GET', 'POST'])
 def index():
     return dumps({"status": "OK", "message": "Hello, world!"})
 
-# -------------------------------------------------------------------------------
+# -------------------------------------------------
 # /dump
 # serve the database content
-# -------------------------------------------------------------------------------
+# -------------------------------------------------
 @app.route("/dump", methods=['GET', 'POST'])
 def dump():
     return dumps({
@@ -198,56 +251,30 @@ def dump():
         "head"   : app.cs.head.all()
     })
 
-# -------------------------------------------------------------------------------
-# /debug_load
-# debug: store object in db and return the transaction's ID  
-# -------------------------------------------------------------------------------
-@app.route("/debug_load", methods=['GET', 'POST']) 
-def debugLoad():
-    if request.method == "POST":
-        try:
-            ID = app.cs.debug_register_object(loads(request.data) )
-            return dumps({
-                "status"        :"OK", 
-                "transactionId" : ID
-            })
-        except Exception as e:
-            return dumps({
-                "status"  : "Error", 
-                "message" : e.args
-            })
-    else:
-        return dumps({"status":"Error", "message":"Use POST method."}) 
-
-# -------------------------------------------------------------------------------
+# -------------------------------------------------
 # /process
 # process a transaction 
-# -------------------------------------------------------------------------------
+# -------------------------------------------------
 @app.route("/process", methods=['GET', 'POST'])
 def process():
     if request.method == "POST":
         try:
-            TxID, OutTx = app.cs.apply_transaction(loads(request.data))
-            return dumps({
-                "status"          : "OK", 
-                "transactionId"   : TxID, 
-                "outputObjectIds" : OutTx, 
-                "head"            : app.cs.head.all()
-            })
+        	returns = app.cs.apply_transaction(request.data)
+        	return dumps({"status" : "OK", "returns" : returns})
         except Exception as e:
             return dumps({
                 "status"  : "Error", 
                 "message" : e.args
             })
     else:
-        return dumps({"status":"Error", "message":"Use POST method."})
+        return dumps({"status":"ERROR", "message":"Use POST method."})
 
 
-##################################################################################
+###################################################
 # execute
-##################################################################################
+###################################################
 if __name__ == "__main__":
     app.run(host="127.0.0.1", port="5000") 
 
 
-##################################################################################
+###################################################

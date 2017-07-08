@@ -10,6 +10,8 @@ from json                   import loads, dumps
 from threading              import Thread
 from cspace_service         import app            as app_cspace
 from bank_transfer_checker  import app            as app_checker
+from hashlib                import sha256
+from binascii               import hexlify
 import pytest
 import requests
 
@@ -17,39 +19,24 @@ import requests
 ##################################################################################
 # variables
 ##################################################################################
-# checker URL
+# URLs
+node_url      =  r"http://127.0.0.1:5000/process"
 checker_url   =  r"http://127.0.0.1:5001/bank/transfer"
 
 # old accounts (before money transfer)
 Sally_account = {"accountId": "Sally", "amount": 10}
-Alice_account = {"accountId": "Alice", "amount": 0}
+Alice_account = {"accountId": "Alice", "amount": 10}
 
 # new accounts (after money transfer)
 Sally_account_new = {"accountId": "Sally", "amount": 2}
-Alice_account_new = {"accountId": "Alice", "amount": 8}
+Alice_account_new = {"accountId": "Alice", "amount": 18}
 
-# example transfer 
-Example_transfer = {
-    "contractMethod"    : checker_url,
-    "inputs"            : [Sally_account, Alice_account],
-    "referenceInputs"   : [],
-    "parameters"        : {"amount":8},
-    "outputs"           : [Sally_account_new, Alice_account_new]
-}
-Example_invalid_transfer = {
-    "contractMethod"    : checker_url,
-    "inputs"            : [Sally_account, Alice_account],
-    "referenceInputs"   : [],
-    "parameters"        : {"amount":100},
-    "outputs"           : [Sally_account_new, Alice_account_new]
-}
-Example_malformed_transfer = {
-    "contractMethod"    : checker_url,
-    # inputs are missing
-    "referenceInputs"   : [],
-    "parameters"        : {"amount":100},
-    "outputs"           : [Sally_account_new, Alice_account_new]
-}
+
+##################################################################################
+# utils
+##################################################################################
+def H(x):
+    return hexlify(sha256(x).digest())
 
 
 ##################################################################################
@@ -77,22 +64,84 @@ def test_request():
     t = Thread(target=start_checker, args=(app_checker,))
     t.start()
 
+    # create test vectors
+    createAccount = {
+        "contractID"        : 1,
+        "inputs"            : [],
+        "referenceInputs"   : [],
+        "parameters"        : [],
+        "returns"           : [],
+        "outputs"           : [dumps(Sally_account)],
+        "dependencies"      : []
+    }
+    transfer = {
+        "contractID"        : 2,
+        "inputs"            : [dumps(Sally_account), dumps(Alice_account)],
+        "referenceInputs"   : [],
+        "parameters"        : [dumps({"amount":8})],
+        "returns"           : [],
+        "outputs"           : [dumps(Sally_account_new), dumps(Alice_account_new)],
+        "dependencies"      : []
+    }
+    invalidTransfer = {
+        "contractID"        : 2,
+        "inputs"            : [dumps(Sally_account), dumps(Alice_account)],
+        "referenceInputs"   : [],
+        "parameters"        : [dumps({"amount":100})],
+        "returns"           : [],
+        "outputs"           : [dumps(Sally_account_new), dumps(Alice_account_new)],
+        "dependencies"      : []
+    }
+    malformedTransfer = {
+        "contractID"        : 2,
+        # inputs are missing
+        "referenceInputs"   : [],
+        "parameters"        : [dumps({"amount":8})],
+        "returns"           : [],
+        "outputs"           : [dumps(Sally_account_new), dumps(Alice_account_new)],
+        "dependencies"      : []
+    }
+    invalidOperation = {
+        "contractID"        : 100,
+        "inputs"            : [dumps(Sally_account), dumps(Alice_account)],
+        "referenceInputs"   : [],
+        "parameters"        : [dumps({"amount":1})],
+        "returns"           : [],
+        "outputs"           : [dumps(Sally_account_new), dumps(Alice_account_new)],
+        "dependencies"      : []
+    }
+
+    # execute tests
     try:
+        # test account creation
+        r = requests.post(checker_url, data = dumps(createAccount))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "OK"
+
         # test a valid transfer
-        r = requests.post(checker_url, data = dumps(Example_transfer))
+        r = requests.post(checker_url, data = dumps(transfer))
+        #print(loads(r.text))
         assert loads(r.text)["status"] == "OK"
 
         # test a transfer with invalid amount
-        r = requests.post(checker_url, data = dumps(Example_invalid_transfer))
-        assert loads(r.text)["status"] == "Error"
+        r = requests.post(checker_url, data = dumps(invalidTransfer))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "ERROR"
 
         # test malformed transaction
-        r = requests.post(checker_url, data = dumps(Example_malformed_transfer))
-        assert loads(r.text)["status"] == "Error"
+        r = requests.post(checker_url, data = dumps(malformedTransfer))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "ERROR"
+
+        # test invalid operation
+        r = requests.post(checker_url, data = dumps(invalidOperation))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "ERROR"
 
         # get request
         r = requests.get(checker_url)
-        assert loads(r.text)["status"] == "Error"
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "ERROR"
 
     finally:
         t._Thread__stop()
@@ -100,7 +149,7 @@ def test_request():
 
 # -------------------------------------------------------------------------------
 # test 2
-# final check: simulate a complete transfer
+# final check: simulate a complete transfer & account creation
 # -------------------------------------------------------------------------------
 def test_transaction():
     # run checker and cspace
@@ -110,30 +159,64 @@ def test_transaction():
     t2.start()
 
     try:
-        # add Alice's account to DB
-        O1 = dumps(Sally_account)
-        r = requests.post(r"http://127.0.0.1:5000/debug_load", data = dumps(O1))
-        assert loads(r.text)["status"] == "OK"
-        ID1 = loads(r.text)["transactionId"]
-
-        # add Sally's account to DB
-        O2 = dumps(Alice_account)
-        r = requests.post(r"http://127.0.0.1:5000/debug_load", data = dumps(O2))
-        assert loads(r.text)["status"] == "OK"
-        ID2 = loads(r.text)["transactionId"]
-
-        # define transfer
-        T = {
-            "contractMethod"  : "http://127.0.0.1:5001/bank/transfer",
-            "inputs"          : [ID1, ID2],
-            "referenceInputs" : [],
-            "parameters"      : {"amount":8},
-            "outputs"         : [Sally_account_new, Alice_account_new]
+        ##
+        # create Alice's account
+        ##
+        T1 = {
+            "contractID"        : 1,
+            "inputIDs"          : [],
+            "referenceInputIDs" : [],
+            "parameters"        : [],
+            "returns"           : [],
+            "outputs"           : [dumps(Sally_account)],
+            "dependencies"      : []
         }
+        store1 = []
+        packet1 = {"transaction": T1, "store": store1}
 
+        ##
+        # create Sally's account
+        ##
+        T2 = {
+            "contractID"        : 1,
+            "inputIDs"          : [],
+            "referenceInputIDs" : [],
+            "parameters"        : [],
+            "returns"           : [],
+            "outputs"           : [dumps(Alice_account)],
+            "dependencies"      : []
+        }
+        store2 = []
+        packet2 = {"transaction": T2, "store": store2}
+
+        ##
+        # make the transfer
+        ##
+        ID1 = H( H(dumps(T1)) +"|"+ dumps(Sally_account))
+        ID2 = H( H(dumps(T2)) +"|"+ dumps(Alice_account))
+        T3 = {
+            "contractID"        : 2,
+            "inputIDs"          : [ID1, ID2],
+            "referenceInputIDs" : [],
+            "parameters"        : [dumps({"amount":8})],
+            "returns"           : [],
+            "outputs"           : [dumps(Sally_account_new), dumps(Alice_account_new)],
+            "dependencies"      : [dumps(packet1), dumps(packet2)]
+        }
+        store3 = [
+            {"key": ID1, "value": dumps(Sally_account)},
+            {"key": ID2, "value": dumps(Alice_account)}
+        ]
+        packet3 = {"transaction": T3, "store": store3}
+
+
+        ##
         # sumbit the transaction to the ledger
-        r = requests.post(r"http://127.0.0.1:5000/process", data = dumps(T))
+        ##
+        r = requests.post(node_url, data = dumps(packet3))
+        #print(loads(r.text))
         assert loads(r.text)["status"] == "OK"
+
 
     finally:
         t1._Thread__stop()

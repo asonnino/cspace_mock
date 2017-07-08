@@ -23,30 +23,69 @@ def ccheck(V, msg):
 # checker
 # -------------------------------------------------------------------------------      
 def checker_function(T):
-    # check transfer's format
-    ccheck(T["contractMethod"]       == r"http://127.0.0.1:5001/bank/transfer", "Wrong Method")
-    ccheck(len(T["referenceInputs"]) == 0,                                      "Expect no references")
 
-    # retrieve inputs
-    from_account, to_account         = T[u"inputs"]
-    amount                           = T[u"parameters"]["amount"]
-    from_account_new, to_account_new = T[u"outputs"] 
+    # debug
+    #print(T)
 
-    # check positive amount
-    ccheck(0 < amount, "Transfer should be positive")
+    ##
+    ## create a new bank account
+    ##
+    if T["contractID"] == 1:
+        # check transfer's format
+        ccheck(len(T["inputs"]) == 0, "Expect no inputs")
+        ccheck(len(T["referenceInputs"]) == 0, "Expect no references")
+        ccheck(len(T["parameters"]) == 0, "Expect no parameters")
+        ccheck(len(T["returns"]) == 0, "Expect no returns")
+        ccheck(len(T["outputs"]) == 1, "Expect exactly 1 output")
 
-    # check sender and receiver account
-    ccheck(from_account["accountId"] == from_account_new["accountId"],  "Old and new account do not match")
-    ccheck(to_account["accountId"]   == to_account_new["accountId"],    "Old and new account do not match")
+        # check integrity of the new account
+        newAccount = loads(T[u"outputs"][0])
+        ccheck(newAccount["accountId"] != None, "Malformed account")
+        ccheck(newAccount["amount"] == 10, "Incorrect initial ammount")
 
-    # check that the sender has enough fundings
-    ccheck(amount <= from_account["amount"], "No funds available")
 
-    # check inntegrity of the operation
-    ccheck(from_account["amount"] - amount == from_account_new["amount"], "Incorrect new balance")
-    ccheck(to_account["amount"]   + amount == to_account_new["amount"],   "Incorrect new balance")
-    
-    # return
+    ##
+    ## check back transfer
+    ##
+    elif T["contractID"] == 2:
+        # check transfer's format
+        ccheck(len(T["inputs"]) == 2, "Expect exactly 2 inputs")
+        ccheck(len(T["referenceInputs"]) == 0, "Expect no references")
+        ccheck(len(T["parameters"]) == 1, "Expect exactly 1 parameter")
+        ccheck(len(T["returns"]) == 0, "Expect no returns")
+        ccheck(len(T["outputs"]) == 2, "Expect exactly 2 outputs")
+
+        # retrieve inputs
+        from_account     = loads(T[u"inputs"][0])
+        to_account       = loads(T[u"inputs"][1])
+        amount           = loads(T[u"parameters"][0])["amount"]
+        from_account_new = loads(T[u"outputs"][0])
+        to_account_new   = loads(T[u"outputs"][1])
+
+        # check positive amount
+        ccheck(0 < amount, "Transfer should be positive")
+
+        # check sender and receiver account
+        ccheck(from_account["accountId"] == from_account_new["accountId"],  "Old and new account do not match")
+        ccheck(to_account["accountId"]   == to_account_new["accountId"],    "Old and new account do not match")
+
+        # check that the sender has enough fundings
+        ccheck(amount <= from_account["amount"], "No funds available")
+
+        # check inntegrity of the operation
+        ccheck(from_account["amount"] - amount == from_account_new["amount"], "Incorrect new balance")
+        ccheck(to_account["amount"]   + amount == to_account_new["amount"],   "Incorrect new balance")
+
+
+    ##
+    ## wrong method
+    ##
+    else:
+        raise Exception("Wrong method")
+
+    ##
+    ## return
+    ##
     return {"status": "OK"}
 
 
@@ -67,11 +106,11 @@ def check():
         try:
             return dumps(checker_function(loads(request.data)))
         except KeyError as e:
-            return dumps({"status": "Error", "message": e.args})
+            return dumps({"status": "ERROR", "message": e.args})
         except Exception as e:
-            return dumps({"status": "Error", "message": e.args})
+            return dumps({"status": "ERROR", "message": e.args})
     else:
-        return dumps({"status": "Error", "message":"Use POST method."})
+        return dumps({"status": "ERROR", "message":"Use POST method."})
 
 
 ##################################################################################
