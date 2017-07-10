@@ -53,7 +53,7 @@ def start_checker(app):
 
 def start_cspace(app):
     try:
-	    app.run(host="127.0.0.1", port="5000", threaded=True)
+        app.run(host="127.0.0.1", port="5000", threaded=True)
     except Exception as e:
         print "The cspace is already running:", e
         assert False
@@ -233,6 +233,11 @@ def test_transaction():
         t2.terminate()
         t1.join()
         t2.join()
+
+        import os
+        import os.path
+        if os.path.isfile("db.json"):
+            os.remove("db.json")
 
 
 ##################################################################################
