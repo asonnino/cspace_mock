@@ -15,6 +15,8 @@ from binascii               import hexlify
 import pytest
 import requests
 
+from multiprocessing import Process
+import time
 
 ##################################################################################
 # variables
@@ -46,10 +48,15 @@ def start_checker(app):
     try:
         app.run(host="127.0.0.1", port="5001", threaded=True)
     except Exception as e:
-        print "The checker is already running."
+        print "The checker is already running:", e
+        assert False
 
 def start_cspace(app):
-    app.run(host="127.0.0.1", port="5000", threaded=True)
+    try:
+	    app.run(host="127.0.0.1", port="5000", threaded=True)
+    except Exception as e:
+        print "The cspace is already running:", e
+        assert False
 
 
 ##################################################################################
@@ -61,8 +68,9 @@ def start_cspace(app):
 # -------------------------------------------------------------------------------
 def test_request():
     # run the checker
-    t = Thread(target=start_checker, args=(app_checker,))
+    t = Process(target=start_checker, args=(app_checker,))
     t.start()
+    time.sleep(0.1)
 
     # create test vectors
     createAccount = {
@@ -144,7 +152,8 @@ def test_request():
         assert loads(r.text)["status"] == "ERROR"
 
     finally:
-        t._Thread__stop()
+        t.terminate()
+        t.join()
 
 
 # -------------------------------------------------------------------------------
@@ -153,10 +162,11 @@ def test_request():
 # -------------------------------------------------------------------------------
 def test_transaction():
     # run checker and cspace
-    t1 = Thread(target=start_checker, args=(app_checker,))
+    t1 = Process(target=start_checker, args=(app_checker,))
     t1.start()
-    t2 = Thread(target=start_cspace, args=(app_cspace,))
+    t2 = Process(target=start_cspace, args=(app_cspace,))
     t2.start()
+    time.sleep(0.2)
 
     try:
         ##
@@ -219,8 +229,10 @@ def test_transaction():
 
 
     finally:
-        t1._Thread__stop()
-        t2._Thread__stop()
+        t1.terminate()
+        t2.terminate()
+        t1.join()
+        t2.join()
 
 
 ##################################################################################
