@@ -214,7 +214,7 @@ def test_transaction():
         # sumbit the transaction to the ledger
         ##
         r = requests.post(node_url, data = dumps(packet3))
-        #print(loads(r.text))
+        print(loads(r.text))
         assert loads(r.text)["status"] == "OK"
 
 
