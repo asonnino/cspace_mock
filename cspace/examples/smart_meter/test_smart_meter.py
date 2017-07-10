@@ -155,6 +155,279 @@ def test_request():
         t.terminate()
         t.join()
 
+# -------------------------------------------------------------------------------
+# test 2 - Init contract function
+# -------------------------------------------------------------------------------
+def test_Init():
+    # run the checker
+    t = Process(target=start_checker, args=(app_checker,))
+    t.start()
+    time.sleep(0.1)
+
+    # create test vectors
+    T_init = {
+        "contractID"        : 101,
+        "inputs"            : [],
+        "referenceInputs"   : [],
+        "parameters"        : [],
+        "returns"           : [],
+        "outputs"           : [dumps({"type":"SMToken"})],
+        "dependencies"      : []
+    }
+
+    T_init_bad = {
+        "contractID"        : 101,
+        "inputs"            : [],
+        "referenceInputs"   : [],
+        "parameters"        : [],
+        "returns"           : [],
+        "outputs"           : [dumps({"type":"SMToken_other"})],
+        "dependencies"      : []
+    }
+
+    # execute tests
+    try:
+        # test account creation
+        r = requests.post(checker_url, data = dumps(T_init))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "OK"
+
+        # test a valid transfer
+        r = requests.post(checker_url, data = dumps(T_init_bad))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "ERROR"
+
+    finally:
+        t.terminate()
+        t.join()
+
+# -------------------------------------------------------------------------------
+# test 3 -- Create Meter function
+# -------------------------------------------------------------------------------
+
+from petlib.ec import EcGroup
+from petlib.ecdsa import do_ecdsa_sign
+from petlib.pack import encode
+
+
+from hashlib import sha256
+
+
+def test_createMeter():
+    # run the checker
+    t = Process(target=start_checker, args=(app_checker,))
+    t.start()
+    time.sleep(0.1)
+
+    Token = dumps({"type":"SMToken"})
+
+    # Do some crypto:
+    G = EcGroup()
+    sig_key = G.order().random()
+    Pub_raw = sig_key * G.generator()
+    
+
+    Pub = hexlify(encode(Pub_raw))
+    Info = "YYY"
+
+    digest = sha256("D" + str(len(Pub)) + "|" + Pub + "|" + str(len(Info)) + "|" + Info).digest()
+    Sig_raw = do_ecdsa_sign(G, sig_key, digest)
+    Sig = hexlify(encode(Sig_raw))
+
+    Meter = dumps({
+        "type":"SMMeter",
+        "pub":Pub,
+        "info":Info,
+        "readings":hexlify(encode([]))
+        })
+
+    # create test vectors
+    T_init = {
+        "contractID"        : 102,
+        "inputs"            : [Token],
+        "referenceInputs"   : [],
+        "parameters"        : [Pub, Info, Sig],
+        "returns"           : [],
+        "outputs"           : [Token, Meter],
+        "dependencies"      : []
+    }
+
+    # execute tests
+    try:
+        # test account creation
+        r = requests.post(checker_url, data = dumps(T_init))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "OK"
+
+        
+    finally:
+        t.terminate()
+        t.join()
+
+# -------------------------------------------------------------------------------
+# test 4 -- Add reading test
+# -------------------------------------------------------------------------------
+
+from petlib.ec import EcGroup
+from petlib.ecdsa import do_ecdsa_sign
+from petlib.pack import encode
+
+
+from hashlib import sha256
+
+
+def test_addReadings():
+    # run the checker
+    t = Process(target=start_checker, args=(app_checker,))
+    t.start()
+    time.sleep(0.1)
+
+    Token = dumps({"type":"SMToken"})
+
+    # Do some crypto:
+    G = EcGroup()
+    sig_key = G.order().random()
+    Pub_raw = sig_key * G.generator()
+    
+
+    Pub = hexlify(encode(Pub_raw))
+    Info = "YYY"
+
+    Meter = dumps({
+        "type":"SMMeter",
+        "pub":Pub,
+        "info":Info,
+        "readings":hexlify(encode([]))
+        })
+
+    g = G.hash_to_point("g")
+    h = G.hash_to_point("h")
+    readings = [10, 20, 30, 10, 50]
+    openings = [G.order().random() for _ in readings]
+    commitments = (674, [r*g + o*h for r,o in zip(readings, openings)])
+
+    Meter2 = dumps({
+        "type":"SMMeter",
+        "pub":Pub,
+        "info":Info,
+        "readings": hexlify(encode([] + [commitments]))
+        })
+
+    # Compute the commitments
+    bin_commitments = hexlify(encode(commitments))
+    digest = sha256("D" + str(len(Meter)) + "|" + Meter + "|" + str(len(bin_commitments)) + "|" + bin_commitments).digest()
+    Sig_raw = do_ecdsa_sign(G, sig_key, digest)
+    Sig = hexlify(encode(Sig_raw))
+
+
+    # create test vectors
+    T_AddReadings = {
+        "contractID"        : 103,
+        "inputs"            : [Meter],
+        "referenceInputs"   : [],
+        "parameters"        : [bin_commitments, Sig],
+        "returns"           : [],
+        "outputs"           : [Meter2],
+        "dependencies"      : []
+    }
+
+    # execute tests
+    try:
+        # test account creation
+        r = requests.post(checker_url, data = dumps(T_AddReadings))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "OK"
+
+        
+    finally:
+        t.terminate()
+        t.join()
+
+# -------------------------------------------------------------------------------
+# test 5 -- Create Meter function
+# -------------------------------------------------------------------------------
+
+from petlib.ec import EcGroup
+from petlib.ecdsa import do_ecdsa_sign
+from petlib.pack import encode
+
+
+from hashlib import sha256
+
+
+def test_computeBill():
+    # run the checker
+    t = Process(target=start_checker, args=(app_checker,))
+    t.start()
+    time.sleep(0.1)
+
+
+    # Do some crypto:
+    G = EcGroup()
+    sig_key = G.order().random()
+    Pub_raw = sig_key * G.generator()
+    
+
+    Pub = hexlify(encode(Pub_raw))
+    Info = "YYY"
+
+    g = G.hash_to_point("g")
+    h = G.hash_to_point("h")
+    readings = [10, 20, 30, 10, 50]
+    openings = [G.order().random() for _ in readings]
+    commitments = (674, [r*g + o*h for r,o in zip(readings, openings)])
+
+    # Compute the commitments
+    bin_commitments = hexlify(encode(commitments))
+    
+
+    Meter = dumps({
+        "type":"SMMeter",
+        "pub":Pub,
+        "info":Info,
+        "readings":hexlify(encode([commitments]))
+        })
+
+
+    Meter2 = Meter
+    tarrifs = [3, 5, 3, 5, 3]
+    totalBill = sum(r*t for r,t in zip(readings, tarrifs))
+    totalOpen = sum(r*t for r,t in zip(openings, tarrifs)) % G.order()
+
+    proof = hexlify(encode(totalOpen * h))
+
+    Bill = dumps({
+        "type":"SMBill",
+        "info": Info,
+        "period": 674,
+        "bill": totalBill
+        })
+
+    # create test vectors
+    T_computeBill = {
+        "contractID"        : 104,
+        "inputs"            : [Meter],
+        "referenceInputs"   : [],
+        "parameters"        : [str(0), hexlify(encode(tarrifs)), 
+                               str(totalBill), proof],
+        "returns"           : [],
+        "outputs"           : [Meter2, Bill],
+        "dependencies"      : []
+    }
+
+    # execute tests
+    try:
+        # test account creation
+        r = requests.post(checker_url, data = dumps(T_computeBill))
+        #print(loads(r.text))
+        assert loads(r.text)["status"] == "OK"
+
+        
+    finally:
+        t.terminate()
+        t.join()
+
+
 
 # -------------------------------------------------------------------------------
 # test 2
