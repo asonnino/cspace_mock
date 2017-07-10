@@ -1,1 +1,3 @@
-{}
+{
+  "test_bank_transfer.py::test_transaction": true
+}
