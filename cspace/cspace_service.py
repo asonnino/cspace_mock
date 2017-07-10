@@ -275,13 +275,6 @@ def dump():
 def process():
     if request.method == "POST":
         try:
-            with open('config.json') as json_data_file:
-                config = json.load(json_data_file)
-                print(config["contracts"])
-                for item in config["contracts"]:
-                    if item["contractID"] == 1:
-                        print(item["url"])
-
         	returns = app.cs.apply_transaction(request.data)
         	return dumps({"status" : "OK", "returns" : returns})
         except Exception as e:
