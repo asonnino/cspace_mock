@@ -2,13 +2,14 @@
 # Chainspace Mock
 # cspace_service.py
 #
-# version: 0.0.1
+# version: 0.0.2
 ###################################################
 from json        import loads, dumps
 from hashlib     import sha256
 from binascii    import hexlify
 from tinydb      import TinyDB, Query
 import requests
+import json
 
 
 ###################################################
@@ -27,7 +28,7 @@ class ChainSpace:
     # init
     # At th moment, this function initialises all objects that will have be stored in a database.
     # ---------------------------------------------
-    def __init__(self, dbName='db.json'):
+    def __init__(self, dbName='db.json', configPath='config.json'):
         # init db
         db          = TinyDB(dbName)
         self.query  = Query()
@@ -51,6 +52,11 @@ class ChainSpace:
         # init hash of transactions and output objects
         self.head.insert({"head": "Ohm"})
 
+        # load config
+        with open(configPath) as json_data_file:
+            self.config = json.load(json_data_file)
+
+
 
     # ---------------------------------------------
     # update_log
@@ -73,9 +79,19 @@ class ChainSpace:
     # call the transaction's checker
     # ---------------------------------------------
     def call_checker(self, packet):
+
         # call the checker
-        #checkerURL = r"http://127.0.0.1:5001/bank/transfer"
-        checkerURL = r"http://127.0.0.1:5001/value/add"
+        checkerURL = r"http://127.0.0.1:5001/bank/transfer"
+        #checkerURL = r"http://127.0.0.1:5001/value/add"
+
+        #checkerURL = self.config["contracts"]
+        """
+        for item in self.config["contracts"]:
+            if item["contractID"] == packet["contractID"]:
+                checkerURL = item["url"]
+        """
+
+
         r = requests.post(checkerURL, data = dumps(packet))
         # return result
         return loads(r.text)["status"] == "OK"
@@ -259,6 +275,13 @@ def dump():
 def process():
     if request.method == "POST":
         try:
+            with open('config.json') as json_data_file:
+                config = json.load(json_data_file)
+                print(config["contracts"])
+                for item in config["contracts"]:
+                    if item["contractID"] == 1:
+                        print(item["url"])
+
         	returns = app.cs.apply_transaction(request.data)
         	return dumps({"status" : "OK", "returns" : returns})
         except Exception as e:
