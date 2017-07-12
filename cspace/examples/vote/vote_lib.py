@@ -10,7 +10,8 @@ import pytest
 def setup(nid=713):
     """ Generates the Cryptosystem Parameters. """
     G = EcGroup()
-    g = G.hash_to_point(b"g")
+    g = G.generator()
+    #g = G.hash_to_point(b"g")
     hs = [G.hash_to_point(("h%s" % i).encode("utf8")) for i in range(4)]
     o = G.order()
     return (G, g, hs, o)

@@ -19,6 +19,7 @@ import time
 
 import petlib
 from petlib.pack    import encode, decode
+from petlib.ecdsa   import do_ecdsa_sign, do_ecdsa_verify
 from vote_lib       import setup, key_gen, add, sub, make_table, dec, binencrypt
 from vote_lib       import provebin, proveone, provezero, verifyone, verifybin
 
@@ -67,12 +68,6 @@ params          = setup()
 (G, g, hs, o)   = params
 (priv, pub)     = key_gen(params)
 
-# pack parameters
-group_parameters = {
-    "params"   : pack(params),
-    "tally_pk" : pack(pub)
-}
-
 
 
 ##################################################################################
@@ -92,31 +87,61 @@ def test_request():
 
 
     ##
-    ## create test vectors
+    ## add vote
     ##
+    # generate voter's key
+    (voter1_priv, voter1_pub) = key_gen(params)
+
     # input scores
     input_a1, input_b1, input_k1 = binencrypt(params, pub, 0)   # Alice's initial score is 0
     input_c1 = (input_a1, input_b1)
     input_a2, input_b2, input_k2 = binencrypt(params, pub, 0)   # Bob's initial score is 0
     input_c2 = (input_a2, input_b2)
-
-    # new votes
-    vote_a1, vote_b1, vote_k1 = binencrypt(params, pub, 1)      # user is voting for Alice
-    vote_c1 = (vote_a1, vote_b1)
-    vote_a2, vote_b2, vote_k2 = binencrypt(params, pub, 0)      # user is not voting for Bob
-    vote_c2 = (vote_a2, vote_b2)
+    vote_T0 = {
+        "options"   : ["Alice", "Bob"],
+        "scores"    : [pack(input_c1), pack(input_c2)],
+        "voters_pk" : ["voter2_pk", pack(voter1_pub)],
+        "params"    : pack(params),
+        "tally_pk"  : pack(pub)
+    }
 
     # output scores
     output_a1, output_b1, output_k1 = binencrypt(params, pub, 1)   # Alice's score is 1
     output_c1 = (output_a1, output_b1)
     output_a2, output_b2, output_k2 = binencrypt(params, pub, 0)   # Bob's score is 0
     output_c2 = (output_a2, output_b2)
+    vote_T1 = {
+        "options"   : ["Alice", "Bob"],
+        "scores"    : [pack(output_c1), pack(output_c2)],
+        "voters_pk" : ["voter2_pk"],
+        "params"    : pack(params),
+        "tally_pk"  : pack(pub)
+    }
+
+    # new votes
+    vote_a1, vote_b1, vote_k1 = binencrypt(params, pub, 1)      # user is voting for Alice
+    vote_c1 = (vote_a1, vote_b1)
+    vote_a2, vote_b2, vote_k2 = binencrypt(params, pub, 0)      # user is not voting for Bob
+    vote_c2 = (vote_a2, vote_b2)
+    # signature
+    hasher = sha256()
+    ##hasher.update(dumps(vote_T0))
+    ##print H(dumps(vote_T0))
+    hasher.update(dumps([pack(vote_c1), pack(vote_c2)]))
+    sig = do_ecdsa_sign(G, voter1_priv, hasher.digest()) 
+    # pack parameters
+    vote_parameters = {
+        "votes"     : [pack(vote_c1), pack(vote_c2)],
+        "voter_pk"  : pack(voter1_pub),
+        "signature" : pack(sig)
+    }
+    
 
     # proof that votes are binary values
     # this also prove knowledge of the votes and that the ciphertexts are well-formed
     binProof1 = provebin(params, pub, (vote_a1,vote_b1), vote_k1, 1)
     binProof2 = provebin(params, pub, (vote_a2,vote_b2), vote_k2, 0)
-    
+
     # proof that votes sum up to 1
     sum_c = add(vote_c1, vote_c2)
     sum_k = (vote_k1 + vote_k2) % o
@@ -132,41 +157,57 @@ def test_request():
     tmp_k2 = (input_k2 + vote_k2 - output_k2) % o
     consistencyProof2 = provezero(params, pub, tmp_c2, tmp_k2)
 
-
-    ##
-    ## pack
-    ##
-    vote_T0 = {
-        "options"  : ["Alice", "Bob"],
-        "scores"   : [pack(input_c1), pack(input_c2)],
-        "pk"       : ["voter2_pk", "voter1_pk"],
-        "tally_pk" : "tallyPK"
-    }
-    vote_T1 = {
-        "options"  : ["Alice", "Bob"],
-        "scores"   : [pack(output_c1), pack(output_c2)],
-        "pk"       : ["voter2_pk"],
-        "tally_pk" : "tallyPK"
-    }
-    vote_parameters = {
-        "votes"     : [pack(vote_c1), pack(vote_c2)],
-        "voter_pk"  : "voter1_pk",
-        "signature" : "sign"
-    }
+    # pack proofs
     proofs = {
-        "binary"        : [pack(binProof1), pack(binProof2)],                   # proof that votes are binary values
-        "sum"           : pack(sumProof),                                       # proof that votes sum up to 1
-        "consistency"   : [pack(consistencyProof1), pack(consistencyProof2)]    # proof that output == input + vote 
+        "binary"      : [pack(binProof1), pack(binProof2)],                 # proof that votes are binary values
+        "sum"         : pack(sumProof),                                     # proof that votes sum up to 1
+        "consistency" : [pack(consistencyProof1), pack(consistencyProof2)]  # proof that output == input + vote 
     }
+
+    # pack transaction
     add_vote = {
         "contractID"        : 2,
         "inputs"            : [dumps(vote_T0)],
         "referenceInputs"   : [],
-        "parameters"        : [dumps(group_parameters), dumps(vote_parameters), dumps(proofs)],
+        "parameters"        : [dumps(vote_parameters), dumps(proofs)],
         "returns"           : [],
         "outputs"           : [dumps(vote_T1)],
         "dependencies"      : []
     }
+
+
+
+    ##
+    ## tally
+    ##
+    # final score
+    scores = [1, 0]
+
+    # sign
+    hasher = sha256()
+    hasher.update(dumps(vote_T1))
+    hasher.update(dumps(["Alice", "Bob"]))
+    hasher.update(dumps(scores))
+    tally_sig = do_ecdsa_sign(G, priv, hasher.digest())
+
+    # pack
+    result = {
+        "options"   : ["Alice", "Bob"],
+        "scores"    : scores,
+        "params"    : pack(params),
+        "tally_pk"  : pack(pub),
+        "signature" : pack(tally_sig)
+    }
+    tally = {
+        "contractID"        : 3,
+        "inputs"            : [dumps(vote_T1)],
+        "referenceInputs"   : [],
+        "parameters"        : [],
+        "returns"           : [],
+        "outputs"           : [dumps(result)],
+        "dependencies"      : []
+    }
+
 
 
     ##
@@ -176,6 +217,11 @@ def test_request():
 
         # test adding vote
         r = requests.post(checker_url, data = dumps(add_vote))
+        print(loads(r.text))
+        assert loads(r.text)["status"] == "OK"
+
+        # test adding vote
+        r = requests.post(checker_url, data = dumps(tally))
         print(loads(r.text))
         assert loads(r.text)["status"] == "OK"
 
