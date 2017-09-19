@@ -72,7 +72,7 @@ def checker_function(T):
         # check that the sender has enough fundings
         ccheck(amount <= from_account["amount"], "No funds available")
 
-        # check inntegrity of the operation
+        # check integrity of the operation
         ccheck(from_account["amount"] - amount == from_account_new["amount"], "Incorrect new balance")
         ccheck(to_account["amount"]   + amount == to_account_new["amount"],   "Incorrect new balance")
 
